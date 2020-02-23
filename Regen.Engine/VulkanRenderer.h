@@ -28,6 +28,10 @@ namespace Regen {
         void createLogicalDevice( std::vector<const char*>& requiredValidationLayers );
         void createShader( const char* name );
         char* readShaderFile( const char* filename, const char* shaderType, U64* fileSize );
+        void createSwapchain();
+        void createSwapchainImagesAndViews();
+        void createRenderPass();
+        void createGraphicsPipeline();
     private:
         Platform* _platform;
 
@@ -46,5 +50,16 @@ namespace Regen {
 
         U64 _shaderStageCount;
         std::vector<VkPipelineShaderStageCreateInfo> _shaderStages;
+
+        VkSurfaceFormatKHR _swapchainImageFormat;
+        VkExtent2D _swapchainExtent;
+        VkSwapchainKHR _swapchain;
+
+        std::vector<VkImage> _swapchainImages;
+        std::vector<VkImageView> _swapchainImageViews;
+
+        VkRenderPass _renderPass;
+        VkPipelineLayout _pipelineLayout;
+        VkPipeline _pipeline;
     };
 }

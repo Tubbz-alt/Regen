@@ -16,6 +16,8 @@ namespace Regen {
 
         GLFWwindow* GetWindow() { return _window; }
 
+        Extent2D GetFramebufferExtent();
+
         void GetRequiredExtensions( U32* extensionCount, const char*** extensionNames );
 
         void CreateSurface( VkInstance instance, VkSurfaceKHR* surface );

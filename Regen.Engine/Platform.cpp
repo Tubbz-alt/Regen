@@ -29,6 +29,12 @@ namespace Regen {
         glfwTerminate();
     }
 
+    Extent2D Platform::GetFramebufferExtent() {
+        Extent2D extents;
+        glfwGetFramebufferSize( _window, &extents.Width, &extents.Height );
+        return extents;
+    }
+
     void Platform::GetRequiredExtensions( U32* extensionCount, const char*** extensionNames ) {
         *extensionNames = glfwGetRequiredInstanceExtensions( extensionCount );
     }

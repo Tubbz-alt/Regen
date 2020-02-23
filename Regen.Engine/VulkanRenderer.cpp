@@ -5,6 +5,7 @@
 #include "Platform.h"
 #include "Logger.h"
 #include "Defines.h"
+#include "TMath.h"
 #include "VulkanUtils.h"
 #include "VulkanRenderer.h"
 
@@ -119,6 +120,11 @@ namespace Regen {
 
         // Shader creation.
         createShader( "main" );
+
+        createSwapchain();
+        createSwapchainImagesAndViews();
+
+        createRenderPass();
     }
 
     VulkanRenderer::~VulkanRenderer() {
@@ -362,5 +368,333 @@ namespace Regen {
         file.close();
 
         return fileBuffer;
+    }
+
+    void VulkanRenderer::createSwapchain() {
+        VulkanSwapchainSupportDetails swapchainSupport = querySwapchainSupport( _physicalDevice );
+        VkSurfaceCapabilitiesKHR capabilities = swapchainSupport.Capabilities;
+
+        // Choose a swap surface format
+        bool found = false;
+        for( auto format : swapchainSupport.Formats ) {
+
+            // Preferred formats 
+            if( format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ) {
+                _swapchainImageFormat = format;
+                found = true;
+                break;
+            }
+        }
+
+        if( !found ) {
+            _swapchainImageFormat = swapchainSupport.Formats[0];
+        }
+
+        // Choose a present mode
+        VkPresentModeKHR presentMode;
+        found = false;
+        for( auto mode : swapchainSupport.PresentationModes ) {
+
+            // If preferred mode is available, use it
+            if( mode == VK_PRESENT_MODE_MAILBOX_KHR ) {
+                presentMode = mode;
+                found = true;
+            }
+        }
+
+        if( !found ) {
+            presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        }
+
+        // Swapchain extent
+        if( capabilities.currentExtent.width != U32_MAX ) {
+            _swapchainExtent = capabilities.currentExtent;
+        } else {
+            Extent2D extent = _platform->GetFramebufferExtent();
+            _swapchainExtent = { (U32)extent.Width, (U32)extent.Height };
+
+            // Clamp to a value allowed by the GPU.
+            _swapchainExtent.width = TMath::ClampU32( _swapchainExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width );
+            _swapchainExtent.height = TMath::ClampU32( _swapchainExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height );
+        }
+
+        U32 imageCount = capabilities.minImageCount + 1;
+
+        if( capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount ) {
+            imageCount = capabilities.maxImageCount;
+        }
+
+        // Swapchain create info
+        VkSwapchainCreateInfoKHR swapchainCreateInfo = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
+        swapchainCreateInfo.surface = _surface;
+        swapchainCreateInfo.minImageCount = imageCount;
+        swapchainCreateInfo.imageFormat = _swapchainImageFormat.format;
+        swapchainCreateInfo.imageColorSpace = _swapchainImageFormat.colorSpace;
+        swapchainCreateInfo.imageExtent = _swapchainExtent;
+        swapchainCreateInfo.imageArrayLayers = 1;
+        swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        // Setup the queue family indices
+        if( _graphicsFamilyQueueIndex != _presentationFamilyQueueIndex ) {
+            U32 queueFamilyIndices[] = { (U32)_graphicsFamilyQueueIndex, (U32)_presentationFamilyQueueIndex };
+            swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+            swapchainCreateInfo.queueFamilyIndexCount = 2;
+            swapchainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
+        } else {
+            swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            swapchainCreateInfo.queueFamilyIndexCount = 0;
+            swapchainCreateInfo.pQueueFamilyIndices = nullptr;
+        }
+
+        swapchainCreateInfo.preTransform = capabilities.currentTransform;
+        swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        swapchainCreateInfo.presentMode = presentMode;
+        swapchainCreateInfo.clipped = VK_TRUE;
+        swapchainCreateInfo.oldSwapchain = nullptr;
+
+        VK_CHECK( vkCreateSwapchainKHR( _device, &swapchainCreateInfo, nullptr, &_swapchain ) );
+    }
+
+    void VulkanRenderer::createSwapchainImagesAndViews() {
+
+        // Images
+        U32 swapchainImageCount = 0;
+        vkGetSwapchainImagesKHR( _device, _swapchain, &swapchainImageCount, nullptr );
+        _swapchainImages.resize( swapchainImageCount );
+        _swapchainImageViews.resize( swapchainImageCount );
+        vkGetSwapchainImagesKHR( _device, _swapchain, &swapchainImageCount, _swapchainImages.data() );
+
+        for( U32 i = 0; i < swapchainImageCount; ++i ) {
+            VkImageViewCreateInfo viewInfo = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+            viewInfo.image = _swapchainImages[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = _swapchainImageFormat.format;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.baseMipLevel = 0;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.baseArrayLayer = 0;
+            viewInfo.subresourceRange.layerCount = 1;
+
+            VK_CHECK( vkCreateImageView( _device, &viewInfo, nullptr, &_swapchainImageViews[i] ) );
+        }
+    }
+
+    void VulkanRenderer::createRenderPass() {
+
+        // Color attachment
+        VkAttachmentDescription colorAttachment = {};
+        colorAttachment.format = _swapchainImageFormat.format;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        // Color attachment reference
+        VkAttachmentReference colorAttachmentReference = {};
+        colorAttachmentReference.attachment = 0;
+        colorAttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        // Depth attachment
+
+        // Find depth format
+        const U64 candidateCount = 3;
+        VkFormat candidates[candidateCount] = {
+            VK_FORMAT_D32_SFLOAT,
+            VK_FORMAT_D32_SFLOAT_S8_UINT,
+            VK_FORMAT_D24_UNORM_S8_UINT
+        };
+
+        U32 flags = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        VkFormat depthFormat;
+        bool depthFormatFound = false;
+        for( U64 i = 0; i < candidateCount; ++i ) {
+            VkFormatProperties properties;
+            vkGetPhysicalDeviceFormatProperties( _physicalDevice, candidates[i], &properties );
+
+            if( ( properties.linearTilingFeatures & flags ) == flags ) {
+                depthFormat = candidates[i];
+                depthFormatFound = true;
+                break;
+            } else if( ( properties.optimalTilingFeatures & flags ) == flags ) {
+                depthFormat = candidates[i];
+                depthFormatFound = true;
+                break;
+            }
+        }
+
+        if( !depthFormatFound ) {
+            Logger::Fatal( "Unable to find a supported depth format" );
+        }
+
+        // Depth attachment
+        VkAttachmentDescription depthAttachment = {};
+        depthAttachment.format = depthFormat;
+        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        // Depth attachment reference
+        VkAttachmentReference depthAttachmentReference = {};
+        depthAttachmentReference.attachment = 1;
+        depthAttachmentReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        // Subpass
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentReference;
+        subpass.pDepthStencilAttachment = &depthAttachmentReference;
+
+        // Render pass dependencies
+        VkSubpassDependency dependency = {};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        const U32 attachmentCount = 2;
+        VkAttachmentDescription attachments[attachmentCount] = {
+            colorAttachment,
+            depthAttachment
+        };
+
+        // Render pass create.
+        VkRenderPassCreateInfo renderPassCreateInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+        renderPassCreateInfo.attachmentCount = attachmentCount;
+        renderPassCreateInfo.pAttachments = attachments;
+        renderPassCreateInfo.subpassCount = 1;
+        renderPassCreateInfo.pSubpasses = &subpass;
+        renderPassCreateInfo.dependencyCount = 1;
+        renderPassCreateInfo.pDependencies = &dependency;
+        VK_CHECK( vkCreateRenderPass( _device, &renderPassCreateInfo, nullptr, &_renderPass ) );
+    }
+
+    void VulkanRenderer::createGraphicsPipeline() {
+
+        // Viewport
+        VkViewport viewport = {};
+        viewport.x = 0.0f;
+        viewport.y = (F32)_swapchainExtent.height;
+        viewport.width = (F32)_swapchainExtent.width;
+        viewport.height = -(F32)_swapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        // Scissor
+        VkRect2D scissor = {};
+        scissor.offset = { 0, 0 };
+        scissor.extent = { _swapchainExtent.width, _swapchainExtent.height };
+
+        // Viewport state
+        VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+
+        // Rasterizer
+        VkPipelineRasterizationStateCreateInfo rasterizerCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+        rasterizerCreateInfo.depthClampEnable = VK_FALSE;
+        rasterizerCreateInfo.rasterizerDiscardEnable = VK_FALSE;
+        rasterizerCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizerCreateInfo.lineWidth = 1.0f;
+        rasterizerCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizerCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizerCreateInfo.depthBiasEnable = VK_FALSE;
+        rasterizerCreateInfo.depthBiasConstantFactor = 0.0f;
+        rasterizerCreateInfo.depthBiasClamp = 0.0f;
+        rasterizerCreateInfo.depthBiasSlopeFactor = 0.0f;
+
+        // Multisampling.
+        VkPipelineMultisampleStateCreateInfo multisamplingCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+        multisamplingCreateInfo.sampleShadingEnable = VK_FALSE;
+        multisamplingCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisamplingCreateInfo.minSampleShading = 1.0f;
+        multisamplingCreateInfo.pSampleMask = nullptr;
+        multisamplingCreateInfo.alphaToCoverageEnable = VK_FALSE;
+        multisamplingCreateInfo.alphaToOneEnable = VK_FALSE;
+
+        // Depth and stencil testing.
+        VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.stencilTestEnable = VK_FALSE;
+
+        VkPipelineColorBlendAttachmentState colorBlendAttachmentState = {};
+        colorBlendAttachmentState.blendEnable = VK_FALSE;
+        colorBlendAttachmentState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+        colorBlendStateCreateInfo.logicOpEnable = VK_FALSE;
+        colorBlendStateCreateInfo.logicOp = VK_LOGIC_OP_COPY;
+        colorBlendStateCreateInfo.attachmentCount = 1;
+        colorBlendStateCreateInfo.pAttachments = &colorBlendAttachmentState;
+        colorBlendStateCreateInfo.blendConstants[0] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[1] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[2] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[3] = 0.0f;
+
+        // Dynamic state
+        VkDynamicState dynamicStates[] = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_LINE_WIDTH
+        };
+
+        VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+        dynamicStateCreateInfo.dynamicStateCount = 2;
+        dynamicStateCreateInfo.pDynamicStates = dynamicStates;
+
+
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+        vertexInputInfo.vertexBindingDescriptionCount = 0;
+        vertexInputInfo.vertexAttributeDescriptionCount = 0;
+
+        // Input assembly
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        // Pipeline layout
+        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        pipelineLayoutCreateInfo.setLayoutCount = 0;
+        pipelineLayoutCreateInfo.pSetLayouts = nullptr;
+        pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
+        pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
+        VK_CHECK( vkCreatePipelineLayout( _device, &pipelineLayoutCreateInfo, nullptr, &_pipelineLayout ) );
+
+        // Pipeline create
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+        pipelineCreateInfo.stageCount = _shaderStageCount;
+        pipelineCreateInfo.pStages = _shaderStages.data();
+        pipelineCreateInfo.pVertexInputState = &vertexInputInfo;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssembly;;
+        pipelineCreateInfo.pViewportState = &viewportState;
+        pipelineCreateInfo.pRasterizationState = &rasterizerCreateInfo;
+        pipelineCreateInfo.pMultisampleState = &multisamplingCreateInfo;
+        pipelineCreateInfo.pDepthStencilState = &depthStencil;
+        pipelineCreateInfo.pColorBlendState = &colorBlendStateCreateInfo;
+        pipelineCreateInfo.pDynamicState = nullptr;
+
+        pipelineCreateInfo.layout = _pipelineLayout;
+        pipelineCreateInfo.renderPass = _renderPass;
+        pipelineCreateInfo.subpass = 0;
+        pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
+        pipelineCreateInfo.basePipelineIndex = -1;
+
+        VK_CHECK( vkCreateGraphicsPipelines( _device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &_pipeline ) );
+
+        Logger::Log( "Graphics pipeline created!" );
     }
 }
