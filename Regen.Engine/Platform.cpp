@@ -4,6 +4,7 @@
 
 #include "Logger.h"
 #include "Engine.h"
+#include "VulkanUtils.h"
 #include "Platform.h"
 
 namespace Regen {
@@ -30,6 +31,10 @@ namespace Regen {
 
     void Platform::GetRequiredExtensions( U32* extensionCount, const char*** extensionNames ) {
         *extensionNames = glfwGetRequiredInstanceExtensions( extensionCount );
+    }
+
+    void Platform::CreateSurface( VkInstance instance, VkSurfaceKHR* surface ) {
+        VK_CHECK( glfwCreateWindowSurface( instance, _window, nullptr, surface ) );
     }
 
     const bool Platform::StartGameLoop() {
