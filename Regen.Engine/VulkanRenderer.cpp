@@ -250,12 +250,18 @@ namespace Regen {
         I32 presentationQueueIndex = -1;
         detectQueueFamilyIndices( _physicalDevice, &graphicsQueueIndex, &presentationQueueIndex );
 
-        const U32 indexCount = 2;
-        U32 indices[indexCount] = { (U32)graphicsQueueIndex, (U32)presentationQueueIndex };
+        // If the queue indices are the same, only one queue needs to be created.
+        bool presentationSharesGraphicsQueue = graphicsQueueIndex == presentationQueueIndex;
+
+        std::vector<U32> indices;
+        indices.push_back( graphicsQueueIndex );
+        if( !presentationSharesGraphicsQueue ) {
+            indices.push_back( presentationQueueIndex );
+        }
 
         // Device queues
-        VkDeviceQueueCreateInfo queueCreateInfos[indexCount];
-        for( U32 i = 0; i < indexCount; ++i ) {
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos( indices.size() );
+        for( U32 i = 0; i < (U32)indices.size(); ++i ) {
             queueCreateInfos[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
             queueCreateInfos[i].queueFamilyIndex = indices[i];
             queueCreateInfos[i].queueCount = 1;
@@ -269,8 +275,8 @@ namespace Regen {
         deviceFeatures.samplerAnisotropy = VK_TRUE; // Request anistrophy
 
         VkDeviceCreateInfo deviceCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-        deviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
-        deviceCreateInfo.queueCreateInfoCount = indexCount;
+        deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
+        deviceCreateInfo.queueCreateInfoCount = (U32)indices.size();
         deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
         deviceCreateInfo.enabledExtensionCount = 1;
         deviceCreateInfo.pNext = nullptr;
