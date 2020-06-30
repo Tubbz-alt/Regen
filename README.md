@@ -1,2 +1,2 @@
 # Regen
-A C++ Game Engine written in C++
+A Game Engine written in C++
