@@ -1,13 +1,5 @@
 #pragma once
 
-#ifndef U32_MAX
-#define U32_MAX 0xffffffffui32
-#endif
-
-#ifndef U64_MAX
-#define U64_MAX 0xffffffffffffffffui64
-#endif
-
 #if _WIN32 || _WIN64
 #define PLATFORM_WINDOWS
 #else
@@ -28,9 +20,26 @@
 #else
 #define REGEN_API __declspec(dllimport)
 #endif
-#elif PLATFORM_LINUX || PLATFORM_MAC
+#elif defined PLATFORM_LINUX || defined PLATFORM_MAC
 #define FORCEINLINE inline
 // TODO: Define REGEN_API for these platforms
+#endif
+
+
+#ifndef U32_MAX
+#ifdef PLATFORM_WINDOWS
+#define U32_MAX 0xffffffffui32
+#elif defined PLATFORM_MAC || defined PLATFORM_LINUX
+#define U32_MAX 0xffffffff
+#endif
+#endif
+
+#ifndef U64_MAX
+#ifdef PLATFORM_WINDOWS
+#define U64_MAX 0xffffffffffffffffui64
+#elif defined PLATFORM_MAC || defined PLATFORM_LINUX
+#define U64_MAX 0xffffffffffffffff
+#endif
 #endif
 
 // Assertions
